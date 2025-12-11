@@ -2,16 +2,62 @@ const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const crypto = require('crypto');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 app.use(express.json());
-app.use(cors());
 
-const db = new sqlite3.Database(':memory:');
+// CORS Configuration
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'file://',
+  // Add your Vercel URL after deployment:
+  process.env.FRONTEND_URL || ''
+];
+
+app.use(cors({
+  origin: function(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (origin.startsWith('file://')) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1 || origin.endsWith('.vercel.app')) {
+      callback(null, true);
+    } else {
+      callback(null, true); // Allow all for now
+    }
+  },
+  credentials: true
+}));
+
+// Database Configuration
+// In production (Render), use in-memory but with better admin key handling
+const isProduction = process.env.NODE_ENV === 'production';
+const useInMemory = isProduction; // Use in-memory in production (Render free tier)
+
+let db;
+if (useInMemory) {
+  db = new sqlite3.Database(':memory:', (err) => {
+    if (err) {
+      console.error('❌ Database connection error:', err);
+    } else {
+      console.log('✅ Database connected (in-memory)');
+    }
+  });
+} else {
+  const DB_PATH = path.join(__dirname, 'database.db');
+  db = new sqlite3.Database(DB_PATH, (err) => {
+    if (err) {
+      console.error('❌ Database connection error:', err);
+    } else {
+      console.log('✅ Database connected (file-based)');
+      console.log('💾 Database path:', DB_PATH);
+    }
+  });
+}
 
 // Initialize database
 db.serialize(() => {
-  db.run(`CREATE TABLE users (
+  db.run(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     api_key TEXT UNIQUE NOT NULL,
     role TEXT NOT NULL,
@@ -19,7 +65,7 @@ db.serialize(() => {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  db.run(`CREATE TABLE rules (
+  db.run(`CREATE TABLE IF NOT EXISTS rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pattern TEXT NOT NULL,
     action TEXT NOT NULL,
@@ -27,7 +73,7 @@ db.serialize(() => {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  db.run(`CREATE TABLE commands (
+  db.run(`CREATE TABLE IF NOT EXISTS commands (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     command_text TEXT NOT NULL,
@@ -38,7 +84,7 @@ db.serialize(() => {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  db.run(`CREATE TABLE audit_logs (
+  db.run(`CREATE TABLE IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     action TEXT NOT NULL,
@@ -46,8 +92,7 @@ db.serialize(() => {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  // NEW: Approval requests table
-  db.run(`CREATE TABLE approval_requests (
+  db.run(`CREATE TABLE IF NOT EXISTS approval_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     command_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
@@ -61,26 +106,74 @@ db.serialize(() => {
     FOREIGN KEY(approved_by) REFERENCES users(id)
   )`);
 
-  // Seed default admin
-  const adminKey = crypto.randomBytes(16).toString('hex');
-  db.run('INSERT INTO users (api_key, role, credits) VALUES (?, ?, ?)', 
-    [adminKey, 'admin', 100], function(err) {
-      if (!err) console.log('🔑 Admin API Key:', adminKey);
-    });
+  // Admin key handling - use environment variable if set, otherwise generate
+  const adminKey = process.env.ADMIN_API_KEY || crypto.randomBytes(16).toString('hex');
+  
+  db.get('SELECT * FROM users WHERE role = ?', ['admin'], (err, row) => {
+    if (!row) {
+      db.run('INSERT INTO users (api_key, role, credits) VALUES (?, ?, ?)', 
+        [adminKey, 'admin', 1000], function(err) {
+          if (!err) {
+            console.log('');
+            console.log('═══════════════════════════════════════════');
+            console.log('🔑 ADMIN API KEY:');
+            console.log(adminKey);
+            if (!process.env.ADMIN_API_KEY) {
+              console.log('');
+              console.log('⚠️  IMPORTANT: Set this as ADMIN_API_KEY');
+              console.log('   environment variable in Render to keep');
+              console.log('   it consistent across restarts!');
+            }
+            console.log('═══════════════════════════════════════════');
+            console.log('');
+          }
+        });
+    } else {
+      console.log('✅ Admin user exists - API Key:', row.api_key);
+    }
+  });
 
   // Seed default rules
-  const defaultRules = [
-    [':(){ :|:& };:', 'AUTO_REJECT', 1],
-    ['rm\\s+-rf\\s+/', 'AUTO_REJECT', 2],
-    ['mkfs\\.', 'AUTO_REJECT', 3],
-    ['sudo\\s+', 'REQUIRE_APPROVAL', 4],
-    ['git\\s+(status|log|diff)', 'AUTO_ACCEPT', 5],
-    ['^(ls|cat|pwd|echo)', 'AUTO_ACCEPT', 6]
-  ];
+  db.get('SELECT COUNT(*) as count FROM rules', [], (err, row) => {
+    if (row && row.count === 0) {
+      const defaultRules = [
+        [':(){ :|:& };:', 'AUTO_REJECT', 1],
+        ['rm\\s+-rf\\s+/', 'AUTO_REJECT', 2],
+        ['mkfs\\.', 'AUTO_REJECT', 3],
+        ['sudo\\s+', 'REQUIRE_APPROVAL', 4],
+        ['git\\s+(status|log|diff)', 'AUTO_ACCEPT', 5],
+        ['^(ls|cat|pwd|echo)', 'AUTO_ACCEPT', 6]
+      ];
 
-  const stmt = db.prepare('INSERT INTO rules (pattern, action, priority) VALUES (?, ?, ?)');
-  defaultRules.forEach(rule => stmt.run(rule));
-  stmt.finalize();
+      const stmt = db.prepare('INSERT INTO rules (pattern, action, priority) VALUES (?, ?, ?)');
+      defaultRules.forEach(rule => stmt.run(rule));
+      stmt.finalize();
+      console.log('✅ Default security rules created');
+    }
+  });
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    environment: isProduction ? 'production' : 'development',
+    storage: useInMemory ? 'in-memory' : 'file-based'
+  });
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'Command Gateway API',
+    version: '1.0.0',
+    status: 'running',
+    endpoints: {
+      health: '/health',
+      api: '/api/*'
+    }
+  });
 });
 
 // Auth middleware
@@ -131,12 +224,10 @@ app.post('/api/commands', authenticate, (req, res) => {
     return res.status(400).json({ error: 'Command text required' });
   }
 
-  // Check credits
   if (req.user.credits <= 0) {
     return res.status(400).json({ error: 'Insufficient credits' });
   }
 
-  // Match against rules
   db.all('SELECT * FROM rules ORDER BY priority', [], (err, rules) => {
     if (err) {
       return res.status(500).json({ error: 'Database error' });
@@ -156,7 +247,6 @@ app.post('/api/commands', authenticate, (req, res) => {
     }
 
     if (!matchedRule) {
-      // No match - reject by default
       db.run(
         'INSERT INTO commands (user_id, command_text, status) VALUES (?, ?, ?)',
         [req.user.id, command_text, 'rejected'],
@@ -190,13 +280,11 @@ app.post('/api/commands', authenticate, (req, res) => {
         }
       );
     } else if (matchedRule.action === 'REQUIRE_APPROVAL') {
-      // NEW: Check if already approved
       db.get(
         'SELECT * FROM approval_requests WHERE user_id = ? AND command_text = ? AND status = "approved" ORDER BY created_at DESC LIMIT 1',
         [req.user.id, command_text],
         (err, approval) => {
           if (approval) {
-            // Already approved - execute it
             db.serialize(() => {
               db.run('BEGIN TRANSACTION');
               
@@ -232,7 +320,6 @@ app.post('/api/commands', authenticate, (req, res) => {
               );
             });
           } else {
-            // Not approved - create approval request
             db.run(
               'INSERT INTO commands (user_id, command_text, status, matched_rule_id) VALUES (?, ?, ?, ?)',
               [req.user.id, command_text, 'pending_approval', matchedRule.id],
@@ -263,7 +350,6 @@ app.post('/api/commands', authenticate, (req, res) => {
         }
       );
     } else if (matchedRule.action === 'AUTO_ACCEPT') {
-      // Execute command (mocked)
       db.serialize(() => {
         db.run('BEGIN TRANSACTION');
         
@@ -316,7 +402,7 @@ app.get('/api/commands', authenticate, (req, res) => {
   });
 });
 
-// NEW: Get approval requests (admin only)
+// Get approval requests
 app.get('/api/approvals', authenticate, requireAdmin, (req, res) => {
   db.all(
     `SELECT ar.*, u.api_key as user_key 
@@ -332,7 +418,7 @@ app.get('/api/approvals', authenticate, requireAdmin, (req, res) => {
   );
 });
 
-// NEW: Approve/reject request (admin only)
+// Approve/reject request
 app.post('/api/approvals/:id/:action', authenticate, requireAdmin, (req, res) => {
   const { id, action } = req.params;
 
@@ -363,7 +449,7 @@ app.post('/api/approvals/:id/:action', authenticate, requireAdmin, (req, res) =>
   );
 });
 
-// Get rules (all users can view)
+// Get rules
 app.get('/api/rules', authenticate, (req, res) => {
   db.all('SELECT * FROM rules ORDER BY priority', [], (err, rules) => {
     if (err) return res.status(500).json({ error: 'Database error' });
@@ -371,7 +457,7 @@ app.get('/api/rules', authenticate, (req, res) => {
   });
 });
 
-// Create rule (admin only)
+// Create rule
 app.post('/api/rules', authenticate, requireAdmin, (req, res) => {
   const { pattern, action } = req.body;
 
@@ -383,7 +469,6 @@ app.post('/api/rules', authenticate, requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'Invalid action' });
   }
 
-  // Validate regex
   try {
     new RegExp(pattern);
   } catch (e) {
@@ -405,7 +490,7 @@ app.post('/api/rules', authenticate, requireAdmin, (req, res) => {
   });
 });
 
-// Delete rule (admin only)
+// Delete rule
 app.delete('/api/rules/:id', authenticate, requireAdmin, (req, res) => {
   db.run('DELETE FROM rules WHERE id = ?', [req.params.id], function(err) {
     if (err) return res.status(500).json({ error: 'Database error' });
@@ -414,7 +499,7 @@ app.delete('/api/rules/:id', authenticate, requireAdmin, (req, res) => {
   });
 });
 
-// Get all users (admin only)
+// Get all users
 app.get('/api/users', authenticate, requireAdmin, (req, res) => {
   db.all('SELECT id, api_key, role, credits, created_at FROM users', [], (err, users) => {
     if (err) return res.status(500).json({ error: 'Database error' });
@@ -422,7 +507,7 @@ app.get('/api/users', authenticate, requireAdmin, (req, res) => {
   });
 });
 
-// Create user (admin only)
+// Create user
 app.post('/api/users', authenticate, requireAdmin, (req, res) => {
   const { role } = req.body;
 
@@ -449,7 +534,7 @@ app.post('/api/users', authenticate, requireAdmin, (req, res) => {
   );
 });
 
-// Update user credits (admin only)
+// Update user credits
 app.patch('/api/users/:id/credits', authenticate, requireAdmin, (req, res) => {
   const { credits } = req.body;
 
@@ -464,7 +549,7 @@ app.patch('/api/users/:id/credits', authenticate, requireAdmin, (req, res) => {
   });
 });
 
-// Get audit logs (admin only)
+// Get audit logs
 app.get('/api/audit', authenticate, requireAdmin, (req, res) => {
   db.all(
     'SELECT a.*, u.api_key as user_key FROM audit_logs a JOIN users u ON a.user_id = u.id ORDER BY a.created_at DESC LIMIT 100',
@@ -477,6 +562,15 @@ app.get('/api/audit', authenticate, requireAdmin, (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Command Gateway Backend running on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('');
+  console.log('═══════════════════════════════════════════');
+  console.log('🚀 Command Gateway Backend');
+  console.log('═══════════════════════════════════════════');
+  console.log(`📡 Port: ${PORT}`);
+  console.log(`🌍 Environment: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
+  console.log(`💾 Storage: ${useInMemory ? 'In-Memory' : 'File-Based'}`);
+  console.log(`🔗 Health Check: http://localhost:${PORT}/health`);
+  console.log('═══════════════════════════════════════════');
+  console.log('');
 });
