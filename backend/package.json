@@ -4,7 +4,8 @@
   "description": "Command Gateway API",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "npm rebuild sqlite3 --build-from-source --update-binary || true"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -12,6 +13,6 @@
     "cors": "^2.8.5"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "18.x"
   }
 }
