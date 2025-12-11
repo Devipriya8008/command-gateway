@@ -46,6 +46,21 @@ db.serialize(() => {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // NEW: Approval requests table
+  db.run(`CREATE TABLE approval_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    command_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    command_text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    approved_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    resolved_at DATETIME,
+    FOREIGN KEY(command_id) REFERENCES commands(id),
+    FOREIGN KEY(user_id) REFERENCES users(id),
+    FOREIGN KEY(approved_by) REFERENCES users(id)
+  )`);
+
   // Seed default admin
   const adminKey = crypto.randomBytes(16).toString('hex');
   db.run('INSERT INTO users (api_key, role, credits) VALUES (?, ?, ?)', 
@@ -58,8 +73,9 @@ db.serialize(() => {
     [':(){ :|:& };:', 'AUTO_REJECT', 1],
     ['rm\\s+-rf\\s+/', 'AUTO_REJECT', 2],
     ['mkfs\\.', 'AUTO_REJECT', 3],
-    ['git\\s+(status|log|diff)', 'AUTO_ACCEPT', 4],
-    ['^(ls|cat|pwd|echo)', 'AUTO_ACCEPT', 5]
+    ['sudo\\s+', 'REQUIRE_APPROVAL', 4],
+    ['git\\s+(status|log|diff)', 'AUTO_ACCEPT', 5],
+    ['^(ls|cat|pwd|echo)', 'AUTO_ACCEPT', 6]
   ];
 
   const stmt = db.prepare('INSERT INTO rules (pattern, action, priority) VALUES (?, ?, ?)');
@@ -173,6 +189,79 @@ app.post('/api/commands', authenticate, (req, res) => {
           });
         }
       );
+    } else if (matchedRule.action === 'REQUIRE_APPROVAL') {
+      // NEW: Check if already approved
+      db.get(
+        'SELECT * FROM approval_requests WHERE user_id = ? AND command_text = ? AND status = "approved" ORDER BY created_at DESC LIMIT 1',
+        [req.user.id, command_text],
+        (err, approval) => {
+          if (approval) {
+            // Already approved - execute it
+            db.serialize(() => {
+              db.run('BEGIN TRANSACTION');
+              
+              db.run(
+                'INSERT INTO commands (user_id, command_text, status, matched_rule_id, credits_deducted, result) VALUES (?, ?, ?, ?, ?, ?)',
+                [req.user.id, command_text, 'executed', matchedRule.id, 1, `[MOCKED] Command "${command_text}" executed successfully`],
+                function(err) {
+                  if (err) {
+                    db.run('ROLLBACK');
+                    return res.status(500).json({ error: 'Database error' });
+                  }
+
+                  const commandId = this.lastID;
+
+                  db.run('UPDATE users SET credits = credits - 1 WHERE id = ?', [req.user.id], (err) => {
+                    if (err) {
+                      db.run('ROLLBACK');
+                      return res.status(500).json({ error: 'Failed to deduct credits' });
+                    }
+
+                    db.run('COMMIT');
+                    logAudit(req.user.id, 'COMMAND_EXECUTED', { command_text, rule: matchedRule.pattern });
+                    
+                    res.json({ 
+                      id: commandId,
+                      status: 'executed', 
+                      message: 'Command executed successfully (was pre-approved)',
+                      credits: req.user.credits - 1,
+                      result: `[MOCKED] Command "${command_text}" executed successfully`
+                    });
+                  });
+                }
+              );
+            });
+          } else {
+            // Not approved - create approval request
+            db.run(
+              'INSERT INTO commands (user_id, command_text, status, matched_rule_id) VALUES (?, ?, ?, ?)',
+              [req.user.id, command_text, 'pending_approval', matchedRule.id],
+              function(err) {
+                if (err) return res.status(500).json({ error: 'Database error' });
+
+                const commandId = this.lastID;
+
+                db.run(
+                  'INSERT INTO approval_requests (command_id, user_id, command_text) VALUES (?, ?, ?)',
+                  [commandId, req.user.id, command_text],
+                  function(err) {
+                    if (err) return res.status(500).json({ error: 'Database error' });
+                    
+                    logAudit(req.user.id, 'APPROVAL_REQUESTED', { command_text, rule: matchedRule.pattern });
+                    
+                    res.json({
+                      id: commandId,
+                      status: 'pending_approval',
+                      message: 'Command requires approval from admin. Submit again after approval.',
+                      credits: req.user.credits
+                    });
+                  }
+                );
+              }
+            );
+          }
+        }
+      );
     } else if (matchedRule.action === 'AUTO_ACCEPT') {
       // Execute command (mocked)
       db.serialize(() => {
@@ -227,6 +316,53 @@ app.get('/api/commands', authenticate, (req, res) => {
   });
 });
 
+// NEW: Get approval requests (admin only)
+app.get('/api/approvals', authenticate, requireAdmin, (req, res) => {
+  db.all(
+    `SELECT ar.*, u.api_key as user_key 
+     FROM approval_requests ar 
+     JOIN users u ON ar.user_id = u.id 
+     WHERE ar.status = 'pending'
+     ORDER BY ar.created_at DESC`,
+    [],
+    (err, requests) => {
+      if (err) return res.status(500).json({ error: 'Database error' });
+      res.json(requests);
+    }
+  );
+});
+
+// NEW: Approve/reject request (admin only)
+app.post('/api/approvals/:id/:action', authenticate, requireAdmin, (req, res) => {
+  const { id, action } = req.params;
+
+  if (!['approve', 'reject'].includes(action)) {
+    return res.status(400).json({ error: 'Invalid action' });
+  }
+
+  const newStatus = action === 'approve' ? 'approved' : 'rejected';
+
+  db.run(
+    'UPDATE approval_requests SET status = ?, approved_by = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ? AND status = "pending"',
+    [newStatus, req.user.id, id],
+    function(err) {
+      if (err) return res.status(500).json({ error: 'Database error' });
+      
+      if (this.changes === 0) {
+        return res.status(404).json({ error: 'Request not found or already processed' });
+      }
+
+      logAudit(req.user.id, `APPROVAL_${action.toUpperCase()}D`, { request_id: id });
+      
+      res.json({ 
+        success: true, 
+        message: `Request ${action}d successfully`,
+        status: newStatus
+      });
+    }
+  );
+});
+
 // Get rules (all users can view)
 app.get('/api/rules', authenticate, (req, res) => {
   db.all('SELECT * FROM rules ORDER BY priority', [], (err, rules) => {
@@ -243,7 +379,7 @@ app.post('/api/rules', authenticate, requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'Pattern and action required' });
   }
 
-  if (!['AUTO_ACCEPT', 'AUTO_REJECT'].includes(action)) {
+  if (!['AUTO_ACCEPT', 'AUTO_REJECT', 'REQUIRE_APPROVAL'].includes(action)) {
     return res.status(400).json({ error: 'Invalid action' });
   }
 

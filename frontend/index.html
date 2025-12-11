@@ -157,6 +157,7 @@
     .status-executed { background: #d4edda; color: #155724; }
     .status-rejected { background: #f8d7da; color: #721c24; }
     .status-accepted { background: #d1ecf1; color: #0c5460; }
+    .status-pending_approval { background: #fff3cd; color: #856404; }
     .btn-sm {
       padding: 6px 12px;
       font-size: 12px;
@@ -269,6 +270,10 @@
                      onClick={() => setActiveTab('rules')}>
                   ⚙️ Rules
                 </div>
+                <div className={`tab ${activeTab === 'approvals' ? 'active' : ''}`} 
+                     onClick={() => setActiveTab('approvals')}>
+                  ✋ Approvals
+                </div>
                 <div className={`tab ${activeTab === 'users' ? 'active' : ''}`} 
                      onClick={() => setActiveTab('users')}>
                   👥 Users
@@ -285,6 +290,7 @@
             {activeTab === 'commands' && <CommandTab apiKey={apiKey} user={user} onUpdate={fetchUser} />}
             {activeTab === 'history' && <HistoryTab apiKey={apiKey} />}
             {activeTab === 'rules' && user.role === 'admin' && <RulesTab apiKey={apiKey} />}
+            {activeTab === 'approvals' && user.role === 'admin' && <ApprovalsTab apiKey={apiKey} />}
             {activeTab === 'users' && user.role === 'admin' && <UsersTab apiKey={apiKey} />}
             {activeTab === 'audit' && user.role === 'admin' && <AuditTab apiKey={apiKey} />}
           </div>
@@ -537,6 +543,7 @@
                 >
                   <option value="AUTO_ACCEPT">AUTO_ACCEPT</option>
                   <option value="AUTO_REJECT">AUTO_REJECT</option>
+                  <option value="REQUIRE_APPROVAL">REQUIRE_APPROVAL</option>
                 </select>
               </div>
             </div>
@@ -564,7 +571,7 @@
                 <tr key={rule.id}>
                   <td>{rule.priority}</td>
                   <td><code>{rule.pattern}</code></td>
-                  <td><span className={`status-badge status-${rule.action === 'AUTO_ACCEPT' ? 'executed' : 'rejected'}`}>{rule.action}</span></td>
+                  <td><span className={`status-badge status-${rule.action === 'AUTO_ACCEPT' ? 'executed' : rule.action === 'AUTO_REJECT' ? 'rejected' : 'accepted'}`}>{rule.action}</span></td>
                   <td>
                     <button className="btn-sm btn-danger" onClick={() => handleDelete(rule.id)}>Delete</button>
                   </td>
@@ -717,6 +724,99 @@
               ))}
             </tbody>
           </table>
+        </div>
+      );
+    }
+
+    function ApprovalsTab({ apiKey }) {
+      const [requests, setRequests] = useState([]);
+      const [loading, setLoading] = useState(true);
+
+      useEffect(() => {
+        fetchRequests();
+        const interval = setInterval(fetchRequests, 5000); // Refresh every 5 seconds
+        return () => clearInterval(interval);
+      }, []);
+
+      const fetchRequests = async () => {
+        try {
+          const res = await fetch(`${API_URL}/approvals`, {
+            headers: { 'X-API-Key': apiKey }
+          });
+          const data = await res.json();
+          setRequests(data);
+        } catch (err) {
+          console.error(err);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleAction = async (id, action) => {
+        if (!confirm(`${action === 'approve' ? 'Approve' : 'Reject'} this request?`)) return;
+
+        try {
+          const res = await fetch(`${API_URL}/approvals/${id}/${action}`, {
+            method: 'POST',
+            headers: { 'X-API-Key': apiKey }
+          });
+
+          if (res.ok) {
+            fetchRequests();
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      };
+
+      if (loading) return <p>Loading...</p>;
+
+      return (
+        <div>
+          <h2 style={{marginBottom: '20px'}}>Pending Approval Requests</h2>
+          {requests.length === 0 ? (
+            <div style={{padding: '40px', textAlign: 'center', color: '#666'}}>
+              <p style={{fontSize: '48px'}}>✅</p>
+              <p style={{marginTop: '10px'}}>No pending approval requests</p>
+            </div>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>User</th>
+                  <th>Command</th>
+                  <th>Requested At</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {requests.map(req => (
+                  <tr key={req.id}>
+                    <td>{req.id}</td>
+                    <td><code>{req.user_key?.substring(0, 8)}...</code></td>
+                    <td><code>{req.command_text}</code></td>
+                    <td>{new Date(req.created_at).toLocaleString()}</td>
+                    <td>
+                      <button 
+                        className="btn-sm" 
+                        onClick={() => handleAction(req.id, 'approve')}
+                        style={{background: '#28a745', marginRight: '5px'}}
+                      >
+                        ✓ Approve
+                      </button>
+                      <button 
+                        className="btn-sm btn-danger" 
+                        onClick={() => handleAction(req.id, 'reject')}
+                      >
+                        ✗ Reject
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       );
     }
