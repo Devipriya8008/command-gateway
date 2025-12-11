@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Command Gateway</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container { 
+      max-width: 1200px; 
+      margin: 0 auto; 
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      overflow: hidden;
+    }
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 30px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header h1 { font-size: 28px; }
+    .credits-badge {
+      background: rgba(255,255,255,0.2);
+      padding: 10px 20px;
+      border-radius: 20px;
+      font-size: 18px;
+      font-weight: bold;
+    }
+    .login-form {
+      padding: 40px;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    .input-group { margin-bottom: 20px; }
+    label { 
+      display: block; 
+      margin-bottom: 8px; 
+      font-weight: 600;
+      color: #333;
+    }
+    input, textarea {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: border 0.3s;
+    }
+    input:focus, textarea:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    button {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: transform 0.2s;
+    }
+    button:hover { transform: translateY(-2px); }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .tabs {
+      display: flex;
+      background: #f5f5f5;
+      padding: 0 30px;
+      border-bottom: 2px solid #e0e0e0;
+    }
+    .tab {
+      padding: 15px 25px;
+      cursor: pointer;
+      font-weight: 600;
+      color: #666;
+      border-bottom: 3px solid transparent;
+      transition: all 0.3s;
+    }
+    .tab.active {
+      color: #667eea;
+      border-bottom-color: #667eea;
+    }
+    .content { padding: 30px; }
+    .command-form {
+      background: #f9f9f9;
+      padding: 20px;
+      border-radius: 12px;
+      margin-bottom: 30px;
+    }
+    .command-form textarea {
+      font-family: 'Courier New', monospace;
+      min-height: 80px;
+      margin-bottom: 15px;
+    }
+    .result {
+      padding: 15px;
+      border-radius: 8px;
+      margin-top: 15px;
+      font-size: 14px;
+    }
+    .result.success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    .result.error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    .result.warning {
+      background: #fff3cd;
+      color: #856404;
+      border: 1px solid #ffeeba;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+      font-size: 14px;
+    }
+    th, td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    th {
+      background: #f5f5f5;
+      font-weight: 600;
+      color: #333;
+    }
+    .status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .status-executed { background: #d4edda; color: #155724; }
+    .status-rejected { background: #f8d7da; color: #721c24; }
+    .status-accepted { background: #d1ecf1; color: #0c5460; }
+    .btn-sm {
+      padding: 6px 12px;
+      font-size: 12px;
+      margin-left: 5px;
+    }
+    .btn-danger {
+      background: #dc3545;
+    }
+    .form-row {
+      display: flex;
+      gap: 15px;
+      margin-bottom: 15px;
+    }
+    .form-row > div {
+      flex: 1;
+    }
+    code {
+      background: #f5f5f5;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+    }
+    .logout-btn {
+      background: rgba(255,255,255,0.2);
+      border: 1px solid white;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const API_URL = 'http://localhost:3000/api';
+
+    function App() {
+      const [apiKey, setApiKey] = useState(localStorage.getItem('apiKey') || '');
+      const [user, setUser] = useState(null);
+      const [activeTab, setActiveTab] = useState('commands');
+      const [loading, setLoading] = useState(false);
+
+      useEffect(() => {
+        if (apiKey) {
+          fetchUser();
+        }
+      }, [apiKey]);
+
+      const fetchUser = async () => {
+        try {
+          const res = await fetch(`${API_URL}/me`, {
+            headers: { 'X-API-Key': apiKey }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setUser(data);
+          } else {
+            logout();
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      };
+
+      const login = (key) => {
+        localStorage.setItem('apiKey', key);
+        setApiKey(key);
+      };
+
+      const logout = () => {
+        localStorage.removeItem('apiKey');
+        setApiKey('');
+        setUser(null);
+      };
+
+      if (!user) {
+        return <LoginForm onLogin={login} />;
+      }
+
+      return (
+        <div className="container">
+          <div className="header">
+            <div>
+              <h1>⚡ Command Gateway</h1>
+              <p style={{marginTop: '5px', opacity: 0.9}}>
+                Role: <strong>{user.role.toUpperCase()}</strong>
+              </p>
+            </div>
+            <div style={{display: 'flex', gap: '15px', alignItems: 'center'}}>
+              <div className="credits-badge">
+                💳 {user.credits} Credits
+              </div>
+              <button className="logout-btn" onClick={logout}>Logout</button>
+            </div>
+          </div>
+
+          <div className="tabs">
+            <div className={`tab ${activeTab === 'commands' ? 'active' : ''}`} 
+                 onClick={() => setActiveTab('commands')}>
+              🚀 Submit Command
+            </div>
+            <div className={`tab ${activeTab === 'history' ? 'active' : ''}`} 
+                 onClick={() => setActiveTab('history')}>
+              📜 History
+            </div>
+            {user.role === 'admin' && (
+              <>
+                <div className={`tab ${activeTab === 'rules' ? 'active' : ''}`} 
+                     onClick={() => setActiveTab('rules')}>
+                  ⚙️ Rules
+                </div>
+                <div className={`tab ${activeTab === 'users' ? 'active' : ''}`} 
+                     onClick={() => setActiveTab('users')}>
+                  👥 Users
+                </div>
+                <div className={`tab ${activeTab === 'audit' ? 'active' : ''}`} 
+                     onClick={() => setActiveTab('audit')}>
+                  📊 Audit Logs
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="content">
+            {activeTab === 'commands' && <CommandTab apiKey={apiKey} user={user} onUpdate={fetchUser} />}
+            {activeTab === 'history' && <HistoryTab apiKey={apiKey} />}
+            {activeTab === 'rules' && user.role === 'admin' && <RulesTab apiKey={apiKey} />}
+            {activeTab === 'users' && user.role === 'admin' && <UsersTab apiKey={apiKey} />}
+            {activeTab === 'audit' && user.role === 'admin' && <AuditTab apiKey={apiKey} />}
+          </div>
+        </div>
+      );
+    }
+
+    function LoginForm({ onLogin }) {
+      const [key, setKey] = useState('');
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        if (key.trim()) {
+          onLogin(key.trim());
+        }
+      };
+
+      return (
+        <div className="container">
+          <div className="header">
+            <h1>⚡ Command Gateway</h1>
+          </div>
+          <form className="login-form" onSubmit={handleSubmit}>
+            <h2 style={{marginBottom: '20px', color: '#333'}}>Login with API Key</h2>
+            <div className="input-group">
+              <label>API Key</label>
+              <input
+                type="text"
+                placeholder="Enter your API key..."
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+                required
+              />
+            </div>
+            <button type="submit">Login</button>
+            <p style={{marginTop: '20px', color: '#666', fontSize: '14px'}}>
+              💡 Start your backend to get the admin API key
+            </p>
+          </form>
+        </div>
+      );
+    }
+
+    function CommandTab({ apiKey, user, onUpdate }) {
+      const [command, setCommand] = useState('');
+      const [result, setResult] = useState(null);
+      const [loading, setLoading] = useState(false);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setResult(null);
+
+        try {
+          const res = await fetch(`${API_URL}/commands`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-API-Key': apiKey
+            },
+            body: JSON.stringify({ command_text: command })
+          });
+
+          const data = await res.json();
+          setResult(data);
+          if (res.ok && data.status === 'executed') {
+            onUpdate();
+          }
+          setCommand('');
+        } catch (err) {
+          setResult({ error: 'Failed to submit command' });
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      return (
+        <div>
+          <h2 style={{marginBottom: '20px'}}>Submit a Command</h2>
+          <form className="command-form" onSubmit={handleSubmit}>
+            <label>Command</label>
+            <textarea
+              placeholder="Enter your command here... (e.g., ls -la)"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              required
+            />
+            <button type="submit" disabled={loading || user.credits <= 0}>
+              {loading ? 'Submitting...' : 'Execute Command'}
+            </button>
+
+            {user.credits <= 0 && (
+              <div className="result error" style={{marginTop: '15px'}}>
+                ⚠️ No credits remaining. Contact an admin to add more credits.
+              </div>
+            )}
+
+            {result && (
+              <div className={`result ${result.error ? 'error' : result.status === 'executed' ? 'success' : 'warning'}`}>
+                <strong>{result.status === 'executed' ? '✅ Success!' : result.status === 'rejected' ? '❌ Rejected' : '⚠️ Error'}</strong>
+                <p style={{marginTop: '8px'}}>{result.message || result.error}</p>
+                {result.result && <p style={{marginTop: '8px'}}><code>{result.result}</code></p>}
+                {result.credits !== undefined && <p style={{marginTop: '8px'}}>Credits remaining: <strong>{result.credits}</strong></p>}
+              </div>
+            )}
+          </form>
+        </div>
+      );
+    }
+
+    function HistoryTab({ apiKey }) {
+      const [commands, setCommands] = useState([]);
+      const [loading, setLoading] = useState(true);
+
+      useEffect(() => {
+        fetchHistory();
+      }, []);
+
+      const fetchHistory = async () => {
+        try {
+          const res = await fetch(`${API_URL}/commands`, {
+            headers: { 'X-API-Key': apiKey }
+          });
+          const data = await res.json();
+          setCommands(data);
+        } catch (err) {
+          console.error(err);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      if (loading) return <p>Loading...</p>;
+
+      return (
+        <div>
+          <h2 style={{marginBottom: '20px'}}>Command History</h2>
+          {commands.length === 0 ? (
+            <p style={{color: '#666'}}>No commands executed yet.</p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Command</th>
+                  <th>Status</th>
+                  <th>Credits</th>
+                  <th>Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {commands.map(cmd => (
+                  <tr key={cmd.id}>
+                    <td>{cmd.id}</td>
+                    <td><code>{cmd.command_text}</code></td>
+                    <td><span className={`status-badge status-${cmd.status}`}>{cmd.status}</span></td>
+                    <td>{cmd.credits_deducted || 0}</td>
+                    <td>{new Date(cmd.created_at).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      );
+    }
+
+    function RulesTab({ apiKey }) {
+      const [rules, setRules] = useState([]);
+      const [pattern, setPattern] = useState('');
+      const [action, setAction] = useState('AUTO_ACCEPT');
+      const [result, setResult] = useState(null);
+
+      useEffect(() => {
+        fetchRules();
+      }, []);
+
+      const fetchRules = async () => {
+        const res = await fetch(`${API_URL}/rules`, {
+          headers: { 'X-API-Key': apiKey }
+        });
+        const data = await res.json();
+        setRules(data);
+      };
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setResult(null);
+
+        try {
+          const res = await fetch(`${API_URL}/rules`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-API-Key': apiKey
+            },
+            body: JSON.stringify({ pattern, action })
+          });
+
+          const data = await res.json();
+          if (res.ok) {
+            setResult({ success: true, message: 'Rule created successfully!' });
+            setPattern('');
+            fetchRules();
+          } else {
+            setResult({ success: false, message: data.error });
+          }
+        } catch (err) {
+          setResult({ success: false, message: 'Failed to create rule' });
+        }
+      };
+
+      const handleDelete = async (id) => {
+        if (!confirm('Delete this rule?')) return;
+
+        try {
+          await fetch(`${API_URL}/rules/${id}`, {
+            method: 'DELETE',
+            headers: { 'X-API-Key': apiKey }
+          });
+          fetchRules();
+        } catch (err) {
+          console.error(err);
+        }
+      };
+
+      return (
+        <div>
+          <h2 style={{marginBottom: '20px'}}>Rule Management</h2>
+          
+          <form className="command-form" onSubmit={handleSubmit}>
+            <h3 style={{marginBottom: '15px'}}>Create New Rule</h3>
+            <div className="form-row">
+              <div>
+                <label>Pattern (Regex)</label>
+                <input
+                  type="text"
+                  placeholder="e.g., ^(ls|cat|pwd)"
+                  value={pattern}
+                  onChange={(e) => setPattern(e.target.value)}
+                  required
+                />
+              </div>
+              <div>
+                <label>Action</label>
+                <select 
+                  value={action} 
+                  onChange={(e) => setAction(e.target.value)}
+                  style={{width: '100%', padding: '12px', borderRadius: '8px', border: '2px solid #e0e0e0'}}
+                >
+                  <option value="AUTO_ACCEPT">AUTO_ACCEPT</option>
+                  <option value="AUTO_REJECT">AUTO_REJECT</option>
+                </select>
+              </div>
+            </div>
+            <button type="submit">Create Rule</button>
+
+            {result && (
+              <div className={`result ${result.success ? 'success' : 'error'}`}>
+                {result.message}
+              </div>
+            )}
+          </form>
+
+          <h3 style={{marginTop: '30px', marginBottom: '15px'}}>Existing Rules</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Priority</th>
+                <th>Pattern</th>
+                <th>Action</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rules.map(rule => (
+                <tr key={rule.id}>
+                  <td>{rule.priority}</td>
+                  <td><code>{rule.pattern}</code></td>
+                  <td><span className={`status-badge status-${rule.action === 'AUTO_ACCEPT' ? 'executed' : 'rejected'}`}>{rule.action}</span></td>
+                  <td>
+                    <button className="btn-sm btn-danger" onClick={() => handleDelete(rule.id)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
+    function UsersTab({ apiKey }) {
+      const [users, setUsers] = useState([]);
+      const [role, setRole] = useState('member');
+      const [result, setResult] = useState(null);
+      const [editingCredits, setEditingCredits] = useState(null);
+      const [newCredits, setNewCredits] = useState('');
+
+      useEffect(() => {
+        fetchUsers();
+      }, []);
+
+      const fetchUsers = async () => {
+        const res = await fetch(`${API_URL}/users`, {
+          headers: { 'X-API-Key': apiKey }
+        });
+        const data = await res.json();
+        setUsers(data);
+      };
+
+      const handleCreate = async (e) => {
+        e.preventDefault();
+        setResult(null);
+
+        try {
+          const res = await fetch(`${API_URL}/users`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-API-Key': apiKey
+            },
+            body: JSON.stringify({ role })
+          });
+
+          const data = await res.json();
+          if (res.ok) {
+            setResult({ success: true, data });
+            fetchUsers();
+          } else {
+            setResult({ success: false, message: data.error });
+          }
+        } catch (err) {
+          setResult({ success: false, message: 'Failed to create user' });
+        }
+      };
+
+      const handleUpdateCredits = async (userId) => {
+        try {
+          await fetch(`${API_URL}/users/${userId}/credits`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-API-Key': apiKey
+            },
+            body: JSON.stringify({ credits: parseInt(newCredits) })
+          });
+          setEditingCredits(null);
+          setNewCredits('');
+          fetchUsers();
+        } catch (err) {
+          console.error(err);
+        }
+      };
+
+      return (
+        <div>
+          <h2 style={{marginBottom: '20px'}}>User Management</h2>
+          
+          <form className="command-form" onSubmit={handleCreate}>
+            <h3 style={{marginBottom: '15px'}}>Create New User</h3>
+            <div className="form-row">
+              <div>
+                <label>Role</label>
+                <select 
+                  value={role} 
+                  onChange={(e) => setRole(e.target.value)}
+                  style={{width: '100%', padding: '12px', borderRadius: '8px', border: '2px solid #e0e0e0'}}
+                >
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+            </div>
+            <button type="submit">Create User</button>
+
+            {result && result.success && (
+              <div className="result success">
+                <strong>✅ User created successfully!</strong>
+                <p style={{marginTop: '10px'}}>API Key: <code style={{background: '#fff', padding: '5px 10px'}}>{result.data.api_key}</code></p>
+                <p style={{marginTop: '5px', fontSize: '12px'}}>⚠️ Save this key - it won't be shown again!</p>
+              </div>
+            )}
+            {result && !result.success && (
+              <div className="result error">{result.message}</div>
+            )}
+          </form>
+
+          <h3 style={{marginTop: '30px', marginBottom: '15px'}}>All Users</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>API Key</th>
+                <th>Role</th>
+                <th>Credits</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map(user => (
+                <tr key={user.id}>
+                  <td>{user.id}</td>
+                  <td><code>{user.api_key.substring(0, 8)}...</code></td>
+                  <td><span className={`status-badge ${user.role === 'admin' ? 'status-accepted' : 'status-executed'}`}>{user.role}</span></td>
+                  <td>
+                    {editingCredits === user.id ? (
+                      <div style={{display: 'flex', gap: '5px'}}>
+                        <input
+                          type="number"
+                          value={newCredits}
+                          onChange={(e) => setNewCredits(e.target.value)}
+                          style={{width: '80px', padding: '4px'}}
+                        />
+                        <button className="btn-sm" onClick={() => handleUpdateCredits(user.id)}>Save</button>
+                        <button className="btn-sm" onClick={() => setEditingCredits(null)}>Cancel</button>
+                      </div>
+                    ) : (
+                      <span>{user.credits}</span>
+                    )}
+                  </td>
+                  <td>
+                    {editingCredits !== user.id && (
+                      <button className="btn-sm" onClick={() => {
+                        setEditingCredits(user.id);
+                        setNewCredits(user.credits.toString());
+                      }}>Edit Credits</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
+    function AuditTab({ apiKey }) {
+      const [logs, setLogs] = useState([]);
+      const [loading, setLoading] = useState(true);
+
+      useEffect(() => {
+        fetchLogs();
+      }, []);
+
+      const fetchLogs = async () => {
+        try {
+          const res = await fetch(`${API_URL}/audit`, {
+            headers: { 'X-API-Key': apiKey }
+          });
+          const data = await res.json();
+          setLogs(data);
+        } catch (err) {
+          console.error(err);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      if (loading) return <p>Loading...</p>;
+
+      return (
+        <div>
+          <h2 style={{marginBottom: '20px'}}>Audit Logs</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>User</th>
+                <th>Action</th>
+                <th>Details</th>
+                <th>Timestamp</th>
+              </tr>
+            </thead>
+            <tbody>
+              {logs.map(log => (
+                <tr key={log.id}>
+                  <td>{log.id}</td>
+                  <td><code>{log.user_key?.substring(0, 8)}...</code></td>
+                  <td><span className="status-badge status-accepted">{log.action}</span></td>
+                  <td style={{fontSize: '12px', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis'}}>
+                    {log.details}
+                  </td>
+                  <td>{new Date(log.created_at).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>
