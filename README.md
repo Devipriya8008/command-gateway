@@ -339,11 +339,10 @@ Export audit logs to external systems
 Two-factor authentication support
 API key rotation and expiration
 Webhook support for external integrations
-License
-This project is licensed under the MIT License. See the LICENSE file for details.
 
-Support
-For bug reports and feature requests, please open an issue on GitHub.
+contact
+devipriya8008@gmail.com
+23i212@psgtech.ac.in
 
-For security vulnerabilities, please email security@example.com instead of opening a public issue.
+
 
